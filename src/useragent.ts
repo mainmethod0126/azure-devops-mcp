@@ -6,12 +6,14 @@ interface McpClientInfo {
   version: string;
 }
 
+type UserAgentDeploymentMode = "local" | "hosted";
+
 class UserAgentComposer {
   private _userAgent: string;
   private _mcpClientInfoAppended: boolean;
 
-  constructor(packageVersion: string) {
-    this._userAgent = `AzureDevOps.MCP/${packageVersion} (local)`;
+  constructor(packageVersion: string, deploymentMode: UserAgentDeploymentMode = "local") {
+    this._userAgent = `AzureDevOps.MCP/${packageVersion} (${deploymentMode})`;
     this._mcpClientInfoAppended = false;
   }
 
@@ -27,4 +29,4 @@ class UserAgentComposer {
   }
 }
 
-export { UserAgentComposer, McpClientInfo };
+export { UserAgentComposer, McpClientInfo, UserAgentDeploymentMode };

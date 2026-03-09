@@ -16,11 +16,15 @@ Currently, you need to fetch the list of projects so the LLM has context about t
 
 ## Are PAT's supported?
 
-Sorry, PAT's are currently not supported in this local MCP Sever.
+Yes. PATs can be used for Azure DevOps access through the `envvar` authentication mode by setting `ADO_MCP_AUTH_TOKEN` on the server host.
+
+For hosted `streamable-http` deployments, keep that Azure DevOps credential separate from the MCP access secret presented by the client in the `Authorization` header.
 
 ## Is there a remote supported version of the MCP Server?
 
-At this time, only the local version of the MCP Server is supported.
+Yes. In addition to the local `stdio` experience, the project supports an optional self-hosted `streamable-http` deployment model.
+
+The repository does not currently publish a built-in public hosted URL, so clients must connect to your own HTTPS endpoint and provide an `Authorization: Bearer <secret>` header when prompted.
 
 ## Are personal accounts supported?
 
@@ -28,6 +32,8 @@ Unfortunately, personal accounts are not supported. To maintain a higher level o
 
 ![image of login error for personal accounts](./media/personal-accounts-error.png)
 
-## When will a remote Azure DevOps MCP Server be availble?
+## When will a remote Azure DevOps MCP Server be available?
 
-We receive this question frequently. The good news is that work is currently underway. Development began in early January 2026. Once we can provide a reliable timeline, we will publish it on the public [Azure DevOps roadmap](https://learn.microsoft.com/en-us/azure/devops/release-notes/features-timeline).
+The server now supports self-hosted remote deployments through `streamable-http`.
+
+If Microsoft later publishes a public hosted endpoint or registry `remotes` metadata entry, that availability will be announced on the public [Azure DevOps roadmap](https://learn.microsoft.com/en-us/azure/devops/release-notes/features-timeline). Until then, remote usage means running your own HTTPS deployment.

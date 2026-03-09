@@ -3,12 +3,14 @@
 This guide will help you get started with the Azure DevOps MCP Server in different environments.
 
 - [Prerequisites](#-prerequisites)
+- [Choosing a transport](#-choosing-a-transport)
 - [Getting started with Visual Studio Code & GitHub Copilot](#️-visual-studio-code--github-copilot)
 - [Getting started with Visual Studio 2022 & GitHub Copilot](#%EF%B8%8F-visual-studio-2022--github-copilot)
 - [Getting started with GitHub Copilot CLI](#-using-mcp-server-with-github-copilot-cli)
 - [Getting started with Claude Code](#-using-mcp-server-with-claude-code)
 - [Getting started with Claude Desktop](#️-using-mcp-server-with-claude-desktop)
 - [Getting started with Cursor](#-using-mcp-server-with-cursor)
+- [Hosted streamable-http deployments](#-hosted-streamable-http-deployments)
 - [Optimizing Your Experience](#-optimizing-your-experience)
 
 ## 🕐 Prerequisites
@@ -27,6 +29,15 @@ Before you begin, make sure you have:
 
 1. Install [VS Studio 2022 version 17.14](https://learn.microsoft.com/en-us/visualstudio/releases/2022/release-history) or later
 2. Open a project in Visual Studio
+
+## 🔀 Choosing a Transport
+
+The Azure DevOps MCP Server supports two deployment models:
+
+- **Local `stdio`**: the MCP server runs as a local child process of your editor or CLI. This remains the default and powers the one-click install flows in this guide.
+- **Hosted `streamable-http`**: you run the MCP server behind your own HTTPS endpoint and connect remote MCP clients to that URL.
+
+Use `stdio` unless you specifically need a remotely hosted endpoint. Hosted mode is self-managed and uses a separate bearer secret to protect the MCP endpoint itself.
 
 ## 🍕 Installation Options
 
@@ -120,6 +131,8 @@ For automated scenarios or when you want to use a token stored in an environment
    ```
 
 This approach is particularly useful for CI/pipeline scenarios or when you want to avoid interactive authentication and use another credential source.
+
+All examples in this section continue to use local `stdio`. Hosted `streamable-http` deployments are configured separately and do not replace the one-click local flow.
 
 #### 🛠️ Install from Source (Dev Mode)
 
@@ -327,3 +340,42 @@ Replace `Contoso` with your Azure DevOps organization.
 You can now use the Azure DevOps MCP Server tools directly in chat.
 
 📽️ [Azure DevOps MCP Server: Getting started with Cursor](https://youtu.be/550VPTnjYRg)
+
+## 🌐 Hosted `streamable-http` Deployments
+
+Hosted mode is optional and is meant for self-hosted deployments where an MCP client connects to a shared HTTPS endpoint instead of starting a local process.
+
+### Requirements
+
+1. Run the MCP server behind an HTTPS reverse proxy or managed ingress.
+2. Terminate TLS at that proxy or ingress layer. This application does not terminate TLS itself.
+3. Protect the MCP endpoint with a static `Authorization: Bearer <secret>` header.
+4. Configure Azure DevOps credentials on the server host. The client bearer secret is only for MCP endpoint access and is not forwarded to Azure DevOps.
+
+### Example hosted startup command
+
+Once the hosted transport changes are available in your build, a self-hosted deployment looks like this:
+
+```bash
+mcp-server-azuredevops Contoso \
+  --transport streamable-http \
+  --authentication envvar \
+  --http-host 0.0.0.0 \
+  --http-port 3001 \
+  --http-path /mcp \
+  --http-auth-token "$ADO_MCP_HTTP_AUTH_TOKEN"
+```
+
+Notes:
+
+- Use `env` or `envvar` authentication for non-loopback hosted deployments.
+- Do not use interactive authentication for a public or non-loopback hosted endpoint.
+- If browser-based MCP clients call the endpoint, allow only the specific origins you trust.
+
+### Connecting a client
+
+Hosted clients should connect to your final HTTPS URL, for example `https://mcp.example.com/mcp`, using the remote-server configuration flow provided by that client.
+
+- When the client prompts for request headers or secrets, provide the `Authorization` header as a bearer secret.
+- If your client supports MCP remote metadata, use that metadata only after you have published a real HTTPS endpoint for your deployment.
+- The repository does not currently publish a built-in public hosted URL, so there is no `remotes` entry to copy from `server.json` yet.

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+This guide covers both local `stdio` usage and optional self-hosted `streamable-http` deployments.
+
 To help you troubleshoot and debug issues, try adding the `LOG_LEVEL` to your `mcp.json`
 
 Example
@@ -72,6 +74,23 @@ Example
    node -v
    ```
 
+## Hosted `streamable-http` Issues
+
+1. **Hosted endpoint is reachable over HTTP but not HTTPS**
+   The MCP server is expected to run behind an HTTPS reverse proxy or managed ingress. Terminate TLS at that layer and forward traffic to the application over your internal network.
+
+2. **Hosted requests return `401 Unauthorized`**
+   Hosted mode requires every request to include `Authorization: Bearer <secret>`. This bearer secret protects access to the MCP endpoint and is separate from the Azure DevOps credential used by the server host.
+
+3. **Browser clients return `403 Forbidden`**
+   Browser-originated requests include an `Origin` header. Hosted mode should allow only explicitly configured origins. Non-browser MCP clients that do not send an `Origin` header are still allowed.
+
+4. **Hosted server starts but Azure DevOps calls still fail**
+   The client bearer secret is not forwarded to Azure DevOps. Make sure the server host itself is configured with valid Azure DevOps credentials such as `env`, `envvar`, or `azcli` where appropriate.
+
+5. **Interactive authentication fails in hosted mode**
+   Do not use interactive authentication for non-loopback hosted deployments. Use `env` or `envvar` instead so the server can authenticate without a browser prompt.
+
 ## Authentication Issues
 
 ### Token Authentication via Environment Variables
@@ -109,6 +128,8 @@ For automated scenarios or when you want to use a token stored in an environment
      }
    }
    ```
+
+For hosted `streamable-http` deployments, keep this Azure DevOps credential separate from the HTTP access secret. `ADO_MCP_AUTH_TOKEN` authenticates the server to Azure DevOps, while `ADO_MCP_HTTP_AUTH_TOKEN` protects the hosted MCP endpoint itself.
 
 ### GitHub Codespaces
 

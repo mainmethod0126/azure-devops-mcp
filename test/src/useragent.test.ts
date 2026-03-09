@@ -31,4 +31,10 @@ describe("UserAgentComposer", () => {
     sut.appendMcpClientInfo({ name: "Node", version: "22.0.0" });
     expect(sut.userAgent).toBe("AzureDevOps.MCP/1.0.0 (local) Node/22.0.0");
   });
+
+  it("supports hosted deployment mode labels", () => {
+    const sut = new UserAgentComposer("1.0.0", "hosted");
+
+    expect(sut.userAgent).toBe("AzureDevOps.MCP/1.0.0 (hosted)");
+  });
 });
