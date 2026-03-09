@@ -1,0 +1,47 @@
+services:
+  azure-devops-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: azure-devops-mcp
+    restart: unless-stopped
+    ports:
+      - "${ADO_MCP_PORT:-3001}:3001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001' + (process.env.ADO_MCP_HTTP_PATH || '/mcp'), { headers: { Authorization: 'Bearer ' + process.env.ADO_MCP_HTTP_AUTH_TOKEN } }).then((response) => process.exit(response.status === 405 ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    environment:
+      ADO_MCP_AUTH_TOKEN: ${ADO_MCP_AUTH_TOKEN}
+      ADO_MCP_HTTP_AUTH_TOKEN: ${ADO_MCP_HTTP_AUTH_TOKEN}
+      ADO_MCP_HTTP_PATH: ${ADO_MCP_HTTP_PATH:-/mcp}
+    command:
+      - node
+      - dist/index.js
+      - ${ADO_ORG:?ADO_ORG is required}
+      - --transport
+      - streamable-http
+      - --authentication
+      - envvar
+      - --http-host
+      - 0.0.0.0
+      - --http-port
+      - "3001"
+      - --http-path
+      - ${ADO_MCP_HTTP_PATH:-/mcp}
+      - --domains
+      - ${ADO_MCP_DOMAINS:-all}
+    networks:
+      - dify-mcp
+
+networks:
+  dify-mcp:
+    external: true
