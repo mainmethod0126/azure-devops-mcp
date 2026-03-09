@@ -372,6 +372,32 @@ Notes:
 - Do not use interactive authentication for a public or non-loopback hosted endpoint.
 - If browser-based MCP clients call the endpoint, allow only the specific origins you trust.
 
+### Kubernetes with Helm
+
+If you want to run the hosted server on Kubernetes, use the chart in [`charts/azure-devops-mcp`](../charts/azure-devops-mcp/README.md). The chart expects an existing Secret for both the Azure DevOps PAT and the MCP bearer secret, defaults to a single replica, and exposes the service through an optional ingress.
+
+Create the required Secret:
+
+```bash
+kubectl create secret generic azure-devops-mcp-secrets \
+  --from-literal=ADO_MCP_AUTH_TOKEN='your-azure-devops-pat' \
+  --from-literal=ADO_MCP_HTTP_AUTH_TOKEN='your-long-random-bearer-secret'
+```
+
+Install or upgrade the chart:
+
+```bash
+helm upgrade --install azure-devops-mcp ./charts/azure-devops-mcp \
+  --namespace mcp \
+  --create-namespace \
+  --set organization=contoso \
+  --set image.repository=ghcr.io/your-org/azure-devops-mcp \
+  --set image.tag=2.4.0 \
+  --set secrets.existingSecret.name=azure-devops-mcp-secrets
+```
+
+If you need browser-based clients, enable ingress and set `http.allowedOrigins` to the specific origins you trust. TLS should still terminate at the ingress or reverse proxy layer, not inside this application.
+
 ### Connecting a client
 
 Hosted clients should connect to your final HTTPS URL, for example `https://mcp.example.com/mcp`, using the remote-server configuration flow provided by that client.

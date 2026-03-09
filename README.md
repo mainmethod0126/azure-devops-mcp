@@ -150,7 +150,9 @@ Use hosted mode only when you need to expose the MCP server over HTTPS to remote
 - Azure DevOps calls are made with the credentials configured on the server host.
 - Public `server.json` remote metadata will be added only after a stable public HTTPS URL exists. Until then, the published metadata remains `stdio`-only and hosted deployments are configured directly in your MCP client.
 
-For hosted setup details, including reverse proxy expectations and bearer-secret handling, see [GETTINGSTARTED.md](./docs/GETTINGSTARTED.md) and [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
+For Kubernetes deployments, use the Helm chart in [charts/azure-devops-mcp](./charts/azure-devops-mcp/README.md). It deploys the hosted server with an existing Secret, a single replica by default, and optional ingress support.
+
+For hosted setup details, including reverse proxy expectations and bearer-secret handling, see [GETTINGSTARTED.md](./docs/GETTINGSTARTED.md), the [Helm chart README](./charts/azure-devops-mcp/README.md), and [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 
 ## 🌏 Using Domains
 

@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "azure-devops-mcp.fullname" . }}
+  labels:
+    {{- include "azure-devops-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "azure-devops-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "azure-devops-mcp.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "azure-devops-mcp.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ include "azure-devops-mcp.name" . }}
+          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - dist/index.js
+          args:
+            - {{ required "values.organization is required" .Values.organization | quote }}
+            - "--transport"
+            - "streamable-http"
+            - "--authentication"
+            - {{ .Values.authentication | quote }}
+            - "--http-host"
+            - "0.0.0.0"
+            - "--http-port"
+            - {{ .Values.http.port | quote }}
+            - "--http-path"
+            - {{ .Values.http.path | quote }}
+            - "--http-session-idle-timeout-seconds"
+            - {{ .Values.http.sessionIdleTimeoutSeconds | quote }}
+            {{- range .Values.domains }}
+            - "--domains"
+            - {{ . | quote }}
+            {{- end }}
+            {{- range .Values.http.allowedOrigins }}
+            - "--http-allowed-origin"
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: ADO_MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "azure-devops-mcp.secretName" . }}
+                  key: {{ .Values.secrets.existingSecret.azureDevopsTokenKey | quote }}
+            - name: ADO_MCP_HTTP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "azure-devops-mcp.secretName" . }}
+                  key: {{ .Values.secrets.existingSecret.httpAuthTokenKey | quote }}
+            - name: ADO_MCP_HTTP_PATH
+              value: {{ .Values.http.path | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.http.port }}
+              protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - {{ include "azure-devops-mcp.probeScript" . | quote }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - node
+                - -e
+                - {{ include "azure-devops-mcp.probeScript" . | quote }}
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

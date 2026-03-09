@@ -1,0 +1,59 @@
+organization: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/your-org/azure-devops-mcp
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+strategy:
+  type: Recreate
+
+authentication: envvar
+
+domains:
+  - all
+
+http:
+  port: 3001
+  path: /mcp
+  allowedOrigins: []
+  sessionIdleTimeoutSeconds: 1800
+
+service:
+  type: ClusterIP
+  port: 3001
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: mcp.example.com
+  tls: []
+
+secrets:
+  existingSecret:
+    name: ""
+    azureDevopsTokenKey: ADO_MCP_AUTH_TOKEN
+    httpAuthTokenKey: ADO_MCP_HTTP_AUTH_TOKEN
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

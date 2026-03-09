@@ -1,0 +1,17 @@
+Azure DevOps MCP has been deployed in hosted streamable-http mode.
+
+Internal service endpoint:
+  http://{{ include "azure-devops-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ .Values.http.path }}
+
+The MCP endpoint requires:
+  Authorization: Bearer <ADO_MCP_HTTP_AUTH_TOKEN>
+
+{{- if .Values.ingress.enabled }}
+Ingress hosts:
+{{- range .Values.ingress.hosts }}
+  - {{ .host }}{{ $.Values.http.path }}
+{{- end }}
+{{- else }}
+Ingress is disabled. Use port-forward for local access:
+  kubectl port-forward svc/{{ include "azure-devops-mcp.fullname" . }} 3001:{{ .Values.service.port }}
+{{- end }}

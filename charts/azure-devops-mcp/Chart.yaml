@@ -1,0 +1,6 @@
+apiVersion: v2
+name: azure-devops-mcp
+description: Helm chart for deploying the Azure DevOps MCP server in hosted streamable-http mode.
+type: application
+version: 0.1.0
+appVersion: "2.4.0"
