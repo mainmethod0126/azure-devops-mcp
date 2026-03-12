@@ -25,6 +25,7 @@ const WORKITEM_TOOLS = {
   get_work_item_type: "wit_get_work_item_type",
   get_query: "wit_get_query",
   get_query_results_by_id: "wit_get_query_results_by_id",
+  query_by_wiql: "wit_query_by_wiql",
   update_work_items_batch: "wit_update_work_items_batch",
   work_items_link: "wit_work_items_link",
   work_item_unlink: "wit_work_item_unlink",
@@ -813,6 +814,44 @@ function configureWorkItemTools(server: McpServer, tokenProvider: () => Promise<
         const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
         return {
           content: [{ type: "text", text: `Error retrieving query results: ${errorMessage}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    WORKITEM_TOOLS.query_by_wiql,
+    "Execute a WIQL query directly. Supports full or IDs-only response types.",
+    {
+      query: z.string().describe("The WIQL query string to execute."),
+      project: z.string().optional().describe("The name or ID of the Azure DevOps project. If not provided, the default project will be used."),
+      team: z.string().optional().describe("The name or ID of the Azure DevOps team. If not provided, the default team will be used."),
+      timePrecision: z.boolean().optional().describe("Whether to include time precision in the results. Defaults to false."),
+      top: z.number().default(50).describe("The maximum number of work items to return. Defaults to 50."),
+      responseType: z.enum(["full", "ids"]).default("full").describe("Response type: 'full' returns complete query results (default), 'ids' returns only work item IDs for reduced payload size."),
+    },
+    async ({ query, project, team, timePrecision, top, responseType }) => {
+      try {
+        const connection = await connectionProvider();
+        const workItemApi = await connection.getWorkItemTrackingApi();
+        const teamContext = { project, team };
+        const queryResult = await workItemApi.queryByWiql({ query }, teamContext, timePrecision, top);
+
+        if (responseType === "ids") {
+          const ids = queryResult.workItems?.map((workItem) => workItem.id).filter((id): id is number => id !== undefined) || [];
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ids, count: ids.length }, null, 2) }],
+          };
+        }
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(queryResult, null, 2) }],
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+        return {
+          content: [{ type: "text", text: `Error executing WIQL query: ${errorMessage}` }],
           isError: true,
         };
       }
