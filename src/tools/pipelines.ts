@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { apiVersion, getEnumKeys, safeEnumConvert } from "../utils.js";
 import { WebApi } from "azure-devops-node-api";
 import { BuildQueryOrder, DefinitionQueryOrder } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
-import { ReleaseQueryOrder, ReleaseStatus } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
+import { DeploymentOperationStatus, DeploymentStatus, EnvironmentStatus, ReleaseExpands, ReleaseQueryOrder, ReleaseStatus } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
 import { z } from "zod";
 import { StageUpdateType } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
 import { ConfigurationType, RepositoryType } from "azure-devops-node-api/interfaces/PipelinesInterfaces.js";
@@ -24,11 +24,115 @@ const PIPELINE_TOOLS = {
   pipelines_create_pipeline: "pipelines_create_pipeline",
   pipelines_get_run: "pipelines_get_run",
   pipelines_list_releases: "pipelines_list_releases",
+  pipelines_list_deployments: "pipelines_list_deployments",
   pipelines_list_runs: "pipelines_list_runs",
   pipelines_run_pipeline: "pipelines_run_pipeline",
   pipelines_list_artifacts: "pipelines_list_artifacts",
   pipelines_download_artifact: "pipelines_download_artifact",
 };
+
+const releasesApiVersion = "7.2-preview.9";
+const deploymentsApiVersion = "7.2-preview.2";
+
+function getVsrmBaseUrl(connection: WebApi): string {
+  const orgName = new URL(connection.serverUrl).pathname.split("/").filter(Boolean)[0];
+  if (!orgName) {
+    throw new Error(`Unable to determine organization name from server URL: ${connection.serverUrl}`);
+  }
+
+  return `https://vsrm.dev.azure.com/${orgName}`;
+}
+
+function appendQueryParam(searchParams: URLSearchParams, key: string, value: string | number | boolean | string[] | number[] | undefined): void {
+  if (value === undefined) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return;
+    }
+
+    searchParams.set(key, value.join(","));
+    return;
+  }
+
+  searchParams.set(key, String(value));
+}
+
+function buildVsrmReleaseUrl(connection: WebApi, project: string, resourcePath: string, queryValues: Record<string, string | number | boolean | string[] | number[] | undefined>): string {
+  const url = new URL(`${getVsrmBaseUrl(connection)}/${project}/_apis/release/${resourcePath}`);
+
+  for (const [key, value] of Object.entries(queryValues)) {
+    appendQueryParam(url.searchParams, key, value);
+  }
+
+  return url.toString();
+}
+
+function toIsoDateString(value: Date | undefined): string | undefined {
+  return value?.toISOString();
+}
+
+function convertFlexibleEnum<T extends Record<string, string | number>>(enumObject: T, value: string | number | undefined): string | number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return typeof value === "number" ? value : safeEnumConvert(enumObject, value);
+}
+
+function convertFlexibleEnumFlags<T extends Record<string, string | number>>(enumObject: T, value: string | number | string[] | undefined): string | number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value === "number") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return undefined;
+    }
+
+    return value.reduce((combinedValue, key) => {
+      const enumValue = safeEnumConvert(enumObject, key);
+      return typeof enumValue === "number" ? combinedValue | enumValue : combinedValue;
+    }, 0);
+  }
+
+  return safeEnumConvert(enumObject, value);
+}
+
+async function fetchVsrmReleaseResource(
+  tokenProvider: () => Promise<string>,
+  connectionProvider: () => Promise<WebApi>,
+  userAgentProvider: () => string,
+  project: string,
+  resourcePath: string,
+  queryValues: Record<string, string | number | boolean | string[] | number[] | undefined>,
+  operationName: string
+): Promise<unknown> {
+  const connection = await connectionProvider();
+  const token = await tokenProvider();
+  const url = buildVsrmReleaseUrl(connection, project, resourcePath, queryValues);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+      "User-Agent": userAgentProvider(),
+    },
+  });
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    throw new Error(`Failed to ${operationName}: ${response.status} ${responseText}`);
+  }
+
+  return responseText ? JSON.parse(responseText) : null;
+}
 
 function configurePipelineTools(server: McpServer, tokenProvider: () => Promise<string>, connectionProvider: () => Promise<WebApi>, userAgentProvider: () => string) {
   server.tool(
@@ -270,49 +374,179 @@ function configurePipelineTools(server: McpServer, tokenProvider: () => Promise<
     "Lists classic releases for a given project.",
     {
       project: z.string().describe("Project ID or name to get releases for"),
+      apiVersion: z.string().optional().describe(`API version for the release query. Defaults to '${releasesApiVersion}'.`),
       definitionId: z.number().optional().describe("Release definition ID to filter releases"),
-      statusFilter: z.enum(getEnumKeys(ReleaseStatus) as [string, ...string[]]).optional().describe("Release status to filter releases"),
+      definitionEnvironmentId: z.number().optional().describe("Release definition environment ID to filter releases"),
+      searchText: z.string().optional().describe("Search text to filter releases"),
+      createdBy: z.string().optional().describe("Identity that created the releases"),
+      statusFilter: z.union([z.enum(getEnumKeys(ReleaseStatus) as [string, ...string[]]), z.number()]).optional().describe("Release status to filter releases"),
+      environmentStatusFilter: z
+        .union([z.enum(getEnumKeys(EnvironmentStatus) as [string, ...string[]]), z.number(), z.array(z.enum(getEnumKeys(EnvironmentStatus) as [string, ...string[]]))])
+        .optional()
+        .describe("Environment status filter. Arrays of enum keys are combined bitwise."),
       top: z.number().optional().describe("Number of releases to retrieve"),
       minCreatedTime: z.coerce.date().optional().describe("Minimum created time to filter releases"),
       maxCreatedTime: z.coerce.date().optional().describe("Maximum created time to filter releases"),
       sourceBranchFilter: z.string().optional().describe("Source branch to filter releases"),
       continuationToken: z.number().optional().describe("Continuation token for pagination"),
-      queryOrder: z
-        .enum(getEnumKeys(ReleaseQueryOrder) as [string, ...string[]])
-        .default("Descending")
-        .describe("Order in which releases are returned"),
+      queryOrder: z.union([z.enum(getEnumKeys(ReleaseQueryOrder) as [string, ...string[]]), z.number()]).optional().describe("Order in which releases are returned"),
+      expand: z
+        .union([z.enum(getEnumKeys(ReleaseExpands) as [string, ...string[]]), z.number(), z.array(z.enum(getEnumKeys(ReleaseExpands) as [string, ...string[]]))])
+        .optional()
+        .describe("Release expand options. Arrays of enum keys are combined bitwise."),
+      artifactTypeId: z.string().optional().describe("Artifact type ID used to filter releases"),
+      sourceId: z.string().optional().describe("Source ID used to filter releases"),
+      artifactVersionId: z.string().optional().describe("Artifact version ID used to filter releases"),
       isDeleted: z.boolean().optional().describe("Whether to include soft deleted releases"),
+      tagFilter: z.array(z.string()).optional().describe("A list of tags used to filter releases"),
+      propertyFilters: z.array(z.string()).optional().describe("A list of release property filters to retrieve"),
+      releaseIdFilter: z.array(z.number()).optional().describe("A list of release IDs to filter"),
+      path: z.string().optional().describe("Release folder path filter"),
     },
-    async ({ project, definitionId, statusFilter, top, minCreatedTime, maxCreatedTime, sourceBranchFilter, continuationToken, queryOrder = "Descending", isDeleted }) => {
-      const connection = await connectionProvider();
-      const releaseApi = await connection.getReleaseApi();
-      const releases = await releaseApi.getReleases(
+    async ({
+      project,
+      apiVersion: releaseApiVersion = releasesApiVersion,
+      definitionId,
+      definitionEnvironmentId,
+      searchText,
+      createdBy,
+      statusFilter,
+      environmentStatusFilter,
+      top,
+      minCreatedTime,
+      maxCreatedTime,
+      sourceBranchFilter,
+      continuationToken,
+      queryOrder = "Descending",
+      expand,
+      artifactTypeId,
+      sourceId,
+      artifactVersionId,
+      isDeleted,
+      tagFilter,
+      propertyFilters,
+      releaseIdFilter,
+      path,
+    }) => {
+      const releases = await fetchVsrmReleaseResource(
+        tokenProvider,
+        connectionProvider,
+        userAgentProvider,
         project,
-        definitionId,
-        undefined,
-        undefined,
-        undefined,
-        safeEnumConvert(ReleaseStatus, statusFilter),
-        undefined,
-        minCreatedTime,
-        maxCreatedTime,
-        safeEnumConvert(ReleaseQueryOrder, queryOrder),
-        top,
-        continuationToken,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        sourceBranchFilter,
-        isDeleted,
-        undefined,
-        undefined,
-        undefined,
-        undefined
+        "releases",
+        {
+          "api-version": releaseApiVersion,
+          definitionId,
+          definitionEnvironmentId,
+          searchText,
+          createdBy,
+          statusFilter: convertFlexibleEnum(ReleaseStatus, statusFilter),
+          environmentStatusFilter: convertFlexibleEnumFlags(EnvironmentStatus, environmentStatusFilter),
+          minCreatedTime: toIsoDateString(minCreatedTime),
+          maxCreatedTime: toIsoDateString(maxCreatedTime),
+          queryOrder: convertFlexibleEnum(ReleaseQueryOrder, queryOrder),
+          "$top": top,
+          continuationToken,
+          "$expand": convertFlexibleEnumFlags(ReleaseExpands, expand),
+          artifactTypeId,
+          sourceId,
+          artifactVersionId,
+          sourceBranchFilter,
+          isDeleted,
+          tagFilter,
+          propertyFilters,
+          releaseIdFilter,
+          path,
+        },
+        "list releases"
       );
 
       return {
         content: [{ type: "text", text: JSON.stringify(releases, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    PIPELINE_TOOLS.pipelines_list_deployments,
+    "Lists classic release deployments for a given project.",
+    {
+      project: z.string().describe("Project ID or name to get deployments for"),
+      apiVersion: z.string().optional().describe(`API version for the deployment query. Defaults to '${deploymentsApiVersion}'.`),
+      definitionId: z.number().optional().describe("Release definition ID to filter deployments"),
+      definitionEnvironmentId: z.number().optional().describe("Release definition environment ID to filter deployments"),
+      createdBy: z.string().optional().describe("Identity that created the deployments"),
+      minModifiedTime: z.coerce.date().optional().describe("Minimum modified time to filter deployments"),
+      maxModifiedTime: z.coerce.date().optional().describe("Maximum modified time to filter deployments"),
+      deploymentStatus: z
+        .union([z.enum(getEnumKeys(DeploymentStatus) as [string, ...string[]]), z.number(), z.array(z.enum(getEnumKeys(DeploymentStatus) as [string, ...string[]]))])
+        .optional()
+        .describe("Deployment status filter. Arrays of enum keys are combined bitwise."),
+      operationStatus: z
+        .union([
+          z.enum(getEnumKeys(DeploymentOperationStatus) as [string, ...string[]]),
+          z.number(),
+          z.array(z.enum(getEnumKeys(DeploymentOperationStatus) as [string, ...string[]])),
+        ])
+        .optional()
+        .describe("Deployment operation status filter. Arrays of enum keys are combined bitwise."),
+      latestAttemptsOnly: z.boolean().optional().describe("Whether to only include the latest deployment attempts"),
+      queryOrder: z.union([z.enum(getEnumKeys(ReleaseQueryOrder) as [string, ...string[]]), z.number()]).optional().describe("Order in which deployments are returned"),
+      top: z.number().optional().describe("Number of deployments to retrieve"),
+      continuationToken: z.number().optional().describe("Continuation token for pagination"),
+      createdFor: z.string().optional().describe("Identity for whom deployments were requested"),
+      minStartedTime: z.coerce.date().optional().describe("Minimum started time to filter deployments"),
+      maxStartedTime: z.coerce.date().optional().describe("Maximum started time to filter deployments"),
+      sourceBranch: z.string().optional().describe("Source branch to filter deployments"),
+    },
+    async ({
+      project,
+      apiVersion: deploymentApiVersion = deploymentsApiVersion,
+      definitionId,
+      definitionEnvironmentId,
+      createdBy,
+      minModifiedTime,
+      maxModifiedTime,
+      deploymentStatus,
+      operationStatus,
+      latestAttemptsOnly,
+      queryOrder = "Descending",
+      top,
+      continuationToken,
+      createdFor,
+      minStartedTime,
+      maxStartedTime,
+      sourceBranch,
+    }) => {
+      const deployments = await fetchVsrmReleaseResource(
+        tokenProvider,
+        connectionProvider,
+        userAgentProvider,
+        project,
+        "deployments",
+        {
+          "api-version": deploymentApiVersion,
+          definitionId,
+          definitionEnvironmentId,
+          createdBy,
+          minModifiedTime: toIsoDateString(minModifiedTime),
+          maxModifiedTime: toIsoDateString(maxModifiedTime),
+          deploymentStatus: convertFlexibleEnumFlags(DeploymentStatus, deploymentStatus),
+          operationStatus: convertFlexibleEnumFlags(DeploymentOperationStatus, operationStatus),
+          latestAttemptsOnly,
+          queryOrder: convertFlexibleEnum(ReleaseQueryOrder, queryOrder),
+          "$top": top,
+          continuationToken,
+          createdFor,
+          minStartedTime: toIsoDateString(minStartedTime),
+          maxStartedTime: toIsoDateString(maxStartedTime),
+          sourceBranch,
+        },
+        "list deployments"
+      );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(deployments, null, 2) }],
       };
     }
   );

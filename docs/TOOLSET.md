@@ -12,6 +12,7 @@
 | Pipelines         | [mcp_ado_pipelines_create_pipeline](#mcp_ado_pipelines_create_pipeline)                                   | Create a new pipeline with YAML configuration            |
 | Pipelines         | [mcp_ado_pipelines_get_builds](#mcp_ado_pipelines_get_builds)                                             | Retrieve a list of builds with optional filters          |
 | Pipelines         | [mcp_ado_pipelines_list_releases](#mcp_ado_pipelines_list_releases)                                       | List classic releases in a project                       |
+| Pipelines         | [mcp_ado_pipelines_list_deployments](#mcp_ado_pipelines_list_deployments)                                 | List classic release deployments in a project            |
 | Pipelines         | [mcp_ado_pipelines_get_build_status](#mcp_ado_pipelines_get_build_status)                                 | Get the status of a specific build                       |
 | Pipelines         | [mcp_ado_pipelines_get_build_log](#mcp_ado_pipelines_get_build_log)                                       | Retrieve complete logs for a build                       |
 | Pipelines         | [mcp_ado_pipelines_get_build_log_by_id](#mcp_ado_pipelines_get_build_log_by_id)                           | Get a specific build log by log ID                       |
@@ -149,7 +150,14 @@ Retrieves a list of builds for a given project.
 Lists classic releases for a given project.
 
 - **Required**: `project`
-- **Optional**: `continuationToken`, `definitionId`, `isDeleted`, `maxCreatedTime`, `minCreatedTime`, `queryOrder`, `sourceBranchFilter`, `statusFilter`, `top`
+- **Optional**: `apiVersion`, `artifactTypeId`, `artifactVersionId`, `continuationToken`, `createdBy`, `definitionEnvironmentId`, `definitionId`, `environmentStatusFilter`, `expand`, `isDeleted`, `maxCreatedTime`, `minCreatedTime`, `path`, `propertyFilters`, `queryOrder`, `releaseIdFilter`, `searchText`, `sourceBranchFilter`, `sourceId`, `statusFilter`, `tagFilter`, `top`
+
+### mcp_ado_pipelines_list_deployments
+
+Lists classic release deployments for a given project.
+
+- **Required**: `project`
+- **Optional**: `apiVersion`, `continuationToken`, `createdBy`, `createdFor`, `definitionEnvironmentId`, `definitionId`, `deploymentStatus`, `latestAttemptsOnly`, `maxModifiedTime`, `maxStartedTime`, `minModifiedTime`, `minStartedTime`, `operationStatus`, `queryOrder`, `sourceBranch`, `top`
 
 ### mcp_ado_pipelines_get_build_status
 

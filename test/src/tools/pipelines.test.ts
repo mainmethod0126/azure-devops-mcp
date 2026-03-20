@@ -5,7 +5,7 @@ import { describe, expect, it, beforeEach } from "@jest/globals";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebApi } from "azure-devops-node-api";
 import { StageUpdateType } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
-import { ReleaseQueryOrder, ReleaseStatus } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
+import { DeploymentOperationStatus, DeploymentStatus, EnvironmentStatus, ReleaseExpands, ReleaseQueryOrder, ReleaseStatus } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
 import { configurePipelineTools } from "../../../src/tools/pipelines";
 import { apiVersion } from "../../../src/utils.js";
 import { mockUpdateBuildStageResponse, mockMultipleArtifacts, mockArtifact } from "../../mocks/pipelines";
@@ -42,6 +42,37 @@ describe("configurePipelineTools", () => {
     (global.fetch as jest.MockedFunction<typeof fetch>).mockClear();
   });
 
+  const getToolHandler = (toolName: string) => {
+    const call = (server.tool as jest.Mock).mock.calls.find(([registeredToolName]) => registeredToolName === toolName);
+    if (!call) {
+      throw new Error(`${toolName} tool not registered`);
+    }
+
+    const [, , , handler] = call;
+    return handler;
+  };
+
+  const getLastFetchCall = () => {
+    const fetchCalls = (global.fetch as jest.MockedFunction<typeof fetch>).mock.calls;
+    const lastCall = fetchCalls[fetchCalls.length - 1];
+    if (!lastCall) {
+      throw new Error("fetch was not called");
+    }
+
+    return lastCall;
+  };
+
+  const getLastFetchUrl = () => new URL(getLastFetchCall()[0] as string);
+
+  const mockFetchTextResponse = (body: unknown, status = 200) => {
+    const responseText = typeof body === "string" ? body : JSON.stringify(body);
+    (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      text: jest.fn().mockResolvedValue(responseText),
+    } as unknown as Response);
+  };
+
   describe("tool registration", () => {
     it("registers build tools on the server", () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
@@ -51,6 +82,12 @@ describe("configurePipelineTools", () => {
     it("registers pipelines_list_releases on the server", () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
       const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
+      expect(call).toBeDefined();
+    });
+
+    it("registers pipelines_list_deployments on the server", () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_deployments");
       expect(call).toBeDefined();
     });
   });
@@ -443,133 +480,243 @@ describe("configurePipelineTools", () => {
   });
 
   describe("list_releases tool", () => {
-    it("should call getReleases with default query order when only project is provided", async () => {
+    it("should keep existing release behavior when only project is provided", async () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
-      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
-      if (!call) throw new Error("pipelines_list_releases tool not registered");
-      const [, , , handler] = call;
+      const handler = getToolHandler("pipelines_list_releases");
+      const releasePayload = [{ id: 1, name: "Release-1" }];
 
-      const mockReleaseApi = {
-        getReleases: jest.fn().mockResolvedValue([{ id: 1, name: "Release-1" }]),
-      };
-      mockConnection.getReleaseApi.mockResolvedValue(mockReleaseApi);
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse(releasePayload);
 
       const result = await handler({
         project: "test-project",
       });
 
-      expect(mockReleaseApi.getReleases).toHaveBeenCalledWith(
-        "test-project",
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        ReleaseQueryOrder.Descending.valueOf(),
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined
-      );
-      expect(result.content[0].text).toBe(JSON.stringify([{ id: 1, name: "Release-1" }], null, 2));
+      const [url, options] = getLastFetchCall();
+      const parsedUrl = new URL(url as string);
+
+      expect(parsedUrl.origin).toBe("https://vsrm.dev.azure.com");
+      expect(parsedUrl.pathname).toBe("/test-org/test-project/_apis/release/releases");
+      expect(parsedUrl.searchParams.get("api-version")).toBe("7.2-preview.9");
+      expect(parsedUrl.searchParams.get("queryOrder")).toBe(String(ReleaseQueryOrder.Descending.valueOf()));
+      expect(options).toEqual({
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer mock-token",
+          "User-Agent": "Jest",
+        },
+      });
+      expect(result.content[0].text).toBe(JSON.stringify(releasePayload, null, 2));
     });
 
-    it("should call getReleases with all supported filters and convert enums", async () => {
+    it("should map release enum keys and aliases into REST query parameters", async () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
-      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
-      if (!call) throw new Error("pipelines_list_releases tool not registered");
-      const [, , , handler] = call;
+      const handler = getToolHandler("pipelines_list_releases");
 
-      const mockReleaseApi = {
-        getReleases: jest.fn().mockResolvedValue([{ id: 12, name: "Release-12", status: "active" }]),
-      };
-      mockConnection.getReleaseApi.mockResolvedValue(mockReleaseApi);
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse({ count: 1, value: [{ id: 12, name: "Release-12" }] });
 
+      await handler({
+        project: "test-project",
+        apiVersion: "7.0",
+        statusFilter: "Active",
+        environmentStatusFilter: "InProgress",
+        top: 5,
+        queryOrder: "Ascending",
+        expand: "Artifacts",
+      });
+
+      const parsedUrl = getLastFetchUrl();
+
+      expect(parsedUrl.searchParams.get("api-version")).toBe("7.0");
+      expect(parsedUrl.searchParams.get("statusFilter")).toBe(String(ReleaseStatus.Active.valueOf()));
+      expect(parsedUrl.searchParams.get("environmentStatusFilter")).toBe(String(EnvironmentStatus.InProgress.valueOf()));
+      expect(parsedUrl.searchParams.get("queryOrder")).toBe(String(ReleaseQueryOrder.Ascending.valueOf()));
+      expect(parsedUrl.searchParams.get("$top")).toBe("5");
+      expect(parsedUrl.searchParams.get("$expand")).toBe(String(ReleaseExpands.Artifacts.valueOf()));
+    });
+
+    it("should pass through raw numeric release enums and combine multi-value flags", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const handler = getToolHandler("pipelines_list_releases");
       const minCreatedTime = new Date("2025-01-01T00:00:00.000Z");
       const maxCreatedTime = new Date("2025-01-31T23:59:59.000Z");
 
-      const result = await handler({
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse({ count: 1, value: [{ id: 44, name: "OAuth Release" }] });
+
+      await handler({
         project: "test-project",
         definitionId: 45,
-        statusFilter: "Active",
+        definitionEnvironmentId: 77,
+        searchText: "Oauth",
+        createdBy: "user@contoso.com",
+        statusFilter: ReleaseStatus.Abandoned.valueOf(),
+        environmentStatusFilter: ["Succeeded", "InProgress"],
         top: 25,
         minCreatedTime,
         maxCreatedTime,
         sourceBranchFilter: "refs/heads/main",
         continuationToken: 1234,
-        queryOrder: "Ascending",
+        queryOrder: ReleaseQueryOrder.Ascending.valueOf(),
+        expand: ["Artifacts", "Environments"],
+        artifactTypeId: "Build",
+        sourceId: "build-123",
+        artifactVersionId: "2025.01.31.1",
         isDeleted: true,
+        tagFilter: ["prod", "oauth"],
+        propertyFilters: ["Release.ReleaseName", "Release.ReleaseDescription"],
+        releaseIdFilter: [11, 12],
+        path: "\\Releases\\OAuth",
       });
 
-      expect(mockReleaseApi.getReleases).toHaveBeenCalledWith(
-        "test-project",
-        45,
-        undefined,
-        undefined,
-        undefined,
-        ReleaseStatus.Active.valueOf(),
-        undefined,
-        minCreatedTime,
-        maxCreatedTime,
-        ReleaseQueryOrder.Ascending.valueOf(),
-        25,
-        1234,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        "refs/heads/main",
-        true,
-        undefined,
-        undefined,
-        undefined,
-        undefined
-      );
-      expect(result.content[0].text).toBe(JSON.stringify([{ id: 12, name: "Release-12", status: "active" }], null, 2));
+      const parsedUrl = getLastFetchUrl();
+
+      expect(parsedUrl.searchParams.get("definitionId")).toBe("45");
+      expect(parsedUrl.searchParams.get("definitionEnvironmentId")).toBe("77");
+      expect(parsedUrl.searchParams.get("searchText")).toBe("Oauth");
+      expect(parsedUrl.searchParams.get("createdBy")).toBe("user@contoso.com");
+      expect(parsedUrl.searchParams.get("statusFilter")).toBe(String(ReleaseStatus.Abandoned.valueOf()));
+      expect(parsedUrl.searchParams.get("environmentStatusFilter")).toBe(String(EnvironmentStatus.Succeeded.valueOf() | EnvironmentStatus.InProgress.valueOf()));
+      expect(parsedUrl.searchParams.get("minCreatedTime")).toBe(minCreatedTime.toISOString());
+      expect(parsedUrl.searchParams.get("maxCreatedTime")).toBe(maxCreatedTime.toISOString());
+      expect(parsedUrl.searchParams.get("sourceBranchFilter")).toBe("refs/heads/main");
+      expect(parsedUrl.searchParams.get("continuationToken")).toBe("1234");
+      expect(parsedUrl.searchParams.get("queryOrder")).toBe(String(ReleaseQueryOrder.Ascending.valueOf()));
+      expect(parsedUrl.searchParams.get("$top")).toBe("25");
+      expect(parsedUrl.searchParams.get("$expand")).toBe(String(ReleaseExpands.Artifacts.valueOf() | ReleaseExpands.Environments.valueOf()));
+      expect(parsedUrl.searchParams.get("artifactTypeId")).toBe("Build");
+      expect(parsedUrl.searchParams.get("sourceId")).toBe("build-123");
+      expect(parsedUrl.searchParams.get("artifactVersionId")).toBe("2025.01.31.1");
+      expect(parsedUrl.searchParams.get("isDeleted")).toBe("true");
+      expect(parsedUrl.searchParams.get("tagFilter")).toBe("prod,oauth");
+      expect(parsedUrl.searchParams.get("propertyFilters")).toBe("Release.ReleaseName,Release.ReleaseDescription");
+      expect(parsedUrl.searchParams.get("releaseIdFilter")).toBe("11,12");
+      expect(parsedUrl.searchParams.get("path")).toBe("\\Releases\\OAuth");
     });
 
-    it("should propagate getReleaseApi errors", async () => {
+    it("should surface release HTTP errors", async () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
-      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
-      if (!call) throw new Error("pipelines_list_releases tool not registered");
-      const [, , , handler] = call;
+      const handler = getToolHandler("pipelines_list_releases");
 
-      mockConnection.getReleaseApi.mockRejectedValue(new Error("Release API unavailable"));
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse("Project not found", 404);
 
       await expect(
         handler({
           project: "test-project",
         })
-      ).rejects.toThrow("Release API unavailable");
+      ).rejects.toThrow("Failed to list releases: 404 Project not found");
+    });
+  });
+
+  describe("list_deployments tool", () => {
+    it("should call the deployments endpoint with default query order when only project is provided", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const handler = getToolHandler("pipelines_list_deployments");
+      const deploymentPayload = { count: 1, value: [{ id: 99, deploymentStatus: "succeeded" }] };
+
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse(deploymentPayload);
+
+      const result = await handler({
+        project: "test-project",
+      });
+
+      const parsedUrl = getLastFetchUrl();
+
+      expect(parsedUrl.origin).toBe("https://vsrm.dev.azure.com");
+      expect(parsedUrl.pathname).toBe("/test-org/test-project/_apis/release/deployments");
+      expect(parsedUrl.searchParams.get("api-version")).toBe("7.2-preview.2");
+      expect(parsedUrl.searchParams.get("queryOrder")).toBe(String(ReleaseQueryOrder.Descending.valueOf()));
+      expect(result.content[0].text).toBe(JSON.stringify(deploymentPayload, null, 2));
     });
 
-    it("should propagate getReleases errors", async () => {
+    it("should serialize deployment filters and convert enum inputs", async () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
-      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
-      if (!call) throw new Error("pipelines_list_releases tool not registered");
-      const [, , , handler] = call;
+      const handler = getToolHandler("pipelines_list_deployments");
+      const minModifiedTime = new Date("2025-02-01T00:00:00.000Z");
+      const maxModifiedTime = new Date("2025-02-28T23:59:59.000Z");
+      const minStartedTime = new Date("2025-02-10T00:00:00.000Z");
+      const maxStartedTime = new Date("2025-02-20T23:59:59.000Z");
 
-      const mockReleaseApi = {
-        getReleases: jest.fn().mockRejectedValue(new Error("Project not found")),
-      };
-      mockConnection.getReleaseApi.mockResolvedValue(mockReleaseApi);
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse({ count: 1, value: [{ id: 123, releaseEnvironment: { name: "Production" } }] });
+
+      await handler({
+        project: "test-project",
+        apiVersion: "7.1",
+        definitionId: 10,
+        definitionEnvironmentId: 20,
+        createdBy: "deployer@contoso.com",
+        minModifiedTime,
+        maxModifiedTime,
+        deploymentStatus: ["Succeeded", "InProgress"],
+        operationStatus: "Approved",
+        latestAttemptsOnly: true,
+        queryOrder: "Ascending",
+        top: 4,
+        continuationToken: 55,
+        createdFor: "requester@contoso.com",
+        minStartedTime,
+        maxStartedTime,
+        sourceBranch: "refs/heads/main",
+      });
+
+      const parsedUrl = getLastFetchUrl();
+
+      expect(parsedUrl.searchParams.get("api-version")).toBe("7.1");
+      expect(parsedUrl.searchParams.get("definitionId")).toBe("10");
+      expect(parsedUrl.searchParams.get("definitionEnvironmentId")).toBe("20");
+      expect(parsedUrl.searchParams.get("createdBy")).toBe("deployer@contoso.com");
+      expect(parsedUrl.searchParams.get("minModifiedTime")).toBe(minModifiedTime.toISOString());
+      expect(parsedUrl.searchParams.get("maxModifiedTime")).toBe(maxModifiedTime.toISOString());
+      expect(parsedUrl.searchParams.get("deploymentStatus")).toBe(String(DeploymentStatus.Succeeded.valueOf() | DeploymentStatus.InProgress.valueOf()));
+      expect(parsedUrl.searchParams.get("operationStatus")).toBe(String(DeploymentOperationStatus.Approved.valueOf()));
+      expect(parsedUrl.searchParams.get("latestAttemptsOnly")).toBe("true");
+      expect(parsedUrl.searchParams.get("queryOrder")).toBe(String(ReleaseQueryOrder.Ascending.valueOf()));
+      expect(parsedUrl.searchParams.get("$top")).toBe("4");
+      expect(parsedUrl.searchParams.get("continuationToken")).toBe("55");
+      expect(parsedUrl.searchParams.get("createdFor")).toBe("requester@contoso.com");
+      expect(parsedUrl.searchParams.get("minStartedTime")).toBe(minStartedTime.toISOString());
+      expect(parsedUrl.searchParams.get("maxStartedTime")).toBe(maxStartedTime.toISOString());
+      expect(parsedUrl.searchParams.get("sourceBranch")).toBe("refs/heads/main");
+    });
+
+    it("should pass through raw numeric deployment enums", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const handler = getToolHandler("pipelines_list_deployments");
+
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse({ count: 0, value: [] });
+
+      await handler({
+        project: "test-project",
+        deploymentStatus: DeploymentStatus.Succeeded.valueOf(),
+        operationStatus: DeploymentOperationStatus.Approved.valueOf(),
+        queryOrder: ReleaseQueryOrder.Descending.valueOf(),
+      });
+
+      const parsedUrl = getLastFetchUrl();
+
+      expect(parsedUrl.searchParams.get("deploymentStatus")).toBe(String(DeploymentStatus.Succeeded.valueOf()));
+      expect(parsedUrl.searchParams.get("operationStatus")).toBe(String(DeploymentOperationStatus.Approved.valueOf()));
+      expect(parsedUrl.searchParams.get("queryOrder")).toBe(String(ReleaseQueryOrder.Descending.valueOf()));
+    });
+
+    it("should surface deployment HTTP errors", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const handler = getToolHandler("pipelines_list_deployments");
+
+      (tokenProvider as jest.Mock).mockResolvedValue("mock-token");
+      mockFetchTextResponse("Deployment query failed", 400);
 
       await expect(
         handler({
           project: "test-project",
         })
-      ).rejects.toThrow("Project not found");
+      ).rejects.toThrow("Failed to list deployments: 400 Deployment query failed");
     });
   });
 

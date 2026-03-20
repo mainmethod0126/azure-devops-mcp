@@ -6,7 +6,16 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { getEnumKeys } from "../../src/utils.js";
 import { DefinitionQueryOrder, BuildQueryOrder, StageUpdateType } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
-import { ReleaseDefinitionExpands, ReleaseDefinitionQueryOrder, ReleaseStatus, ReleaseQueryOrder, ReleaseExpands } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
+import {
+  DeploymentOperationStatus,
+  DeploymentStatus,
+  EnvironmentStatus,
+  ReleaseDefinitionExpands,
+  ReleaseDefinitionQueryOrder,
+  ReleaseStatus,
+  ReleaseQueryOrder,
+  ReleaseExpands,
+} from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
 
 interface EnumSchema {
   type: string;
@@ -89,6 +98,51 @@ describe("Enum Schema Generation", () => {
 
       expect(jsonSchema.type).toBe("string");
       expect(jsonSchema.enum).toEqual(["None", "Environments", "Artifacts", "Approvals", "ManualInterventions", "Variables", "Tags"]);
+    });
+
+    it("should generate string type schema for EnvironmentStatus", () => {
+      const schema = z.enum(getEnumKeys(EnvironmentStatus) as [string, ...string[]]);
+      const jsonSchema = zodToJsonSchema(schema) as EnumSchema;
+
+      expect(jsonSchema.type).toBe("string");
+      expect(jsonSchema.enum).toEqual(["Undefined", "NotStarted", "InProgress", "Succeeded", "Canceled", "Rejected", "Queued", "Scheduled", "PartiallySucceeded"]);
+    });
+
+    it("should generate string type schema for DeploymentStatus", () => {
+      const schema = z.enum(getEnumKeys(DeploymentStatus) as [string, ...string[]]);
+      const jsonSchema = zodToJsonSchema(schema) as EnumSchema;
+
+      expect(jsonSchema.type).toBe("string");
+      expect(jsonSchema.enum).toEqual(["Undefined", "NotDeployed", "InProgress", "Succeeded", "PartiallySucceeded", "Failed", "All"]);
+    });
+
+    it("should generate string type schema for DeploymentOperationStatus", () => {
+      const schema = z.enum(getEnumKeys(DeploymentOperationStatus) as [string, ...string[]]);
+      const jsonSchema = zodToJsonSchema(schema) as EnumSchema;
+
+      expect(jsonSchema.type).toBe("string");
+      expect(jsonSchema.enum).toEqual([
+        "Undefined",
+        "Queued",
+        "Scheduled",
+        "Pending",
+        "Approved",
+        "Rejected",
+        "Deferred",
+        "QueuedForAgent",
+        "PhaseInProgress",
+        "PhaseSucceeded",
+        "PhasePartiallySucceeded",
+        "PhaseFailed",
+        "Canceled",
+        "PhaseCanceled",
+        "ManualInterventionPending",
+        "QueuedForPipeline",
+        "Cancelling",
+        "EvaluatingGates",
+        "GateFailed",
+        "All",
+      ]);
     });
   });
 
