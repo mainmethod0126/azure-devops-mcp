@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach } from "@jest/globals";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebApi } from "azure-devops-node-api";
 import { StageUpdateType } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
+import { ReleaseQueryOrder, ReleaseStatus } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
 import { configurePipelineTools } from "../../../src/tools/pipelines";
 import { apiVersion } from "../../../src/utils.js";
 import { mockUpdateBuildStageResponse, mockMultipleArtifacts, mockArtifact } from "../../mocks/pipelines";
@@ -25,7 +26,7 @@ describe("configurePipelineTools", () => {
   let tokenProvider: TokenProviderMock;
   let connectionProvider: ConnectionProviderMock;
   let userAgentProvider: () => string;
-  let mockConnection: { getBuildApi: jest.Mock; getPipelinesApi: jest.Mock; serverUrl: string };
+  let mockConnection: { getBuildApi: jest.Mock; getPipelinesApi: jest.Mock; getReleaseApi: jest.Mock; serverUrl: string };
 
   beforeEach(() => {
     server = { tool: jest.fn() } as unknown as McpServer;
@@ -34,6 +35,7 @@ describe("configurePipelineTools", () => {
     mockConnection = {
       getBuildApi: jest.fn(),
       getPipelinesApi: jest.fn(),
+      getReleaseApi: jest.fn(),
       serverUrl: "https://dev.azure.com/test-org",
     };
     connectionProvider = jest.fn().mockResolvedValue(mockConnection);
@@ -44,6 +46,12 @@ describe("configurePipelineTools", () => {
     it("registers build tools on the server", () => {
       configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
       expect(server.tool as jest.Mock).toHaveBeenCalled();
+    });
+
+    it("registers pipelines_list_releases on the server", () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
+      expect(call).toBeDefined();
     });
   });
 
@@ -431,6 +439,137 @@ describe("configurePipelineTools", () => {
       const params = { project: "nonexistent-project" };
 
       await expect(handler(params)).rejects.toThrow("Project not found");
+    });
+  });
+
+  describe("list_releases tool", () => {
+    it("should call getReleases with default query order when only project is provided", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
+      if (!call) throw new Error("pipelines_list_releases tool not registered");
+      const [, , , handler] = call;
+
+      const mockReleaseApi = {
+        getReleases: jest.fn().mockResolvedValue([{ id: 1, name: "Release-1" }]),
+      };
+      mockConnection.getReleaseApi.mockResolvedValue(mockReleaseApi);
+
+      const result = await handler({
+        project: "test-project",
+      });
+
+      expect(mockReleaseApi.getReleases).toHaveBeenCalledWith(
+        "test-project",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ReleaseQueryOrder.Descending.valueOf(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
+      expect(result.content[0].text).toBe(JSON.stringify([{ id: 1, name: "Release-1" }], null, 2));
+    });
+
+    it("should call getReleases with all supported filters and convert enums", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
+      if (!call) throw new Error("pipelines_list_releases tool not registered");
+      const [, , , handler] = call;
+
+      const mockReleaseApi = {
+        getReleases: jest.fn().mockResolvedValue([{ id: 12, name: "Release-12", status: "active" }]),
+      };
+      mockConnection.getReleaseApi.mockResolvedValue(mockReleaseApi);
+
+      const minCreatedTime = new Date("2025-01-01T00:00:00.000Z");
+      const maxCreatedTime = new Date("2025-01-31T23:59:59.000Z");
+
+      const result = await handler({
+        project: "test-project",
+        definitionId: 45,
+        statusFilter: "Active",
+        top: 25,
+        minCreatedTime,
+        maxCreatedTime,
+        sourceBranchFilter: "refs/heads/main",
+        continuationToken: 1234,
+        queryOrder: "Ascending",
+        isDeleted: true,
+      });
+
+      expect(mockReleaseApi.getReleases).toHaveBeenCalledWith(
+        "test-project",
+        45,
+        undefined,
+        undefined,
+        undefined,
+        ReleaseStatus.Active.valueOf(),
+        undefined,
+        minCreatedTime,
+        maxCreatedTime,
+        ReleaseQueryOrder.Ascending.valueOf(),
+        25,
+        1234,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "refs/heads/main",
+        true,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
+      expect(result.content[0].text).toBe(JSON.stringify([{ id: 12, name: "Release-12", status: "active" }], null, 2));
+    });
+
+    it("should propagate getReleaseApi errors", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
+      if (!call) throw new Error("pipelines_list_releases tool not registered");
+      const [, , , handler] = call;
+
+      mockConnection.getReleaseApi.mockRejectedValue(new Error("Release API unavailable"));
+
+      await expect(
+        handler({
+          project: "test-project",
+        })
+      ).rejects.toThrow("Release API unavailable");
+    });
+
+    it("should propagate getReleases errors", async () => {
+      configurePipelineTools(server, tokenProvider, connectionProvider, userAgentProvider);
+      const call = (server.tool as jest.Mock).mock.calls.find(([toolName]) => toolName === "pipelines_list_releases");
+      if (!call) throw new Error("pipelines_list_releases tool not registered");
+      const [, , , handler] = call;
+
+      const mockReleaseApi = {
+        getReleases: jest.fn().mockRejectedValue(new Error("Project not found")),
+      };
+      mockConnection.getReleaseApi.mockResolvedValue(mockReleaseApi);
+
+      await expect(
+        handler({
+          project: "test-project",
+        })
+      ).rejects.toThrow("Project not found");
     });
   });
 

@@ -11,6 +11,7 @@
 | Core              | [mcp_ado_core_get_identity_ids](#mcp_ado_core_get_identity_ids)                                           | Retrieve identity IDs by search filter                   |
 | Pipelines         | [mcp_ado_pipelines_create_pipeline](#mcp_ado_pipelines_create_pipeline)                                   | Create a new pipeline with YAML configuration            |
 | Pipelines         | [mcp_ado_pipelines_get_builds](#mcp_ado_pipelines_get_builds)                                             | Retrieve a list of builds with optional filters          |
+| Pipelines         | [mcp_ado_pipelines_list_releases](#mcp_ado_pipelines_list_releases)                                       | List classic releases in a project                       |
 | Pipelines         | [mcp_ado_pipelines_get_build_status](#mcp_ado_pipelines_get_build_status)                                 | Get the status of a specific build                       |
 | Pipelines         | [mcp_ado_pipelines_get_build_log](#mcp_ado_pipelines_get_build_log)                                       | Retrieve complete logs for a build                       |
 | Pipelines         | [mcp_ado_pipelines_get_build_log_by_id](#mcp_ado_pipelines_get_build_log_by_id)                           | Get a specific build log by log ID                       |
@@ -142,6 +143,13 @@ Retrieves a list of builds for a given project.
 
 - **Required**: `project`
 - **Optional**: `branchName`, `buildIds`, `buildNumber`, `continuationToken`, `definitions`, `deletedFilter`, `maxBuildsPerDefinition`, `maxTime`, `minTime`, `properties`, `queryOrder`, `queues`, `reasonFilter`, `repositoryId`, `repositoryType`, `requestedFor`, `resultFilter`, `statusFilter`, `tagFilters`, `top`
+
+### mcp_ado_pipelines_list_releases
+
+Lists classic releases for a given project.
+
+- **Required**: `project`
+- **Optional**: `continuationToken`, `definitionId`, `isDeleted`, `maxCreatedTime`, `minCreatedTime`, `queryOrder`, `sourceBranchFilter`, `statusFilter`, `top`
 
 ### mcp_ado_pipelines_get_build_status
 

@@ -5,6 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { apiVersion, getEnumKeys, safeEnumConvert } from "../utils.js";
 import { WebApi } from "azure-devops-node-api";
 import { BuildQueryOrder, DefinitionQueryOrder } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
+import { ReleaseQueryOrder, ReleaseStatus } from "azure-devops-node-api/interfaces/ReleaseInterfaces.js";
 import { z } from "zod";
 import { StageUpdateType } from "azure-devops-node-api/interfaces/BuildInterfaces.js";
 import { ConfigurationType, RepositoryType } from "azure-devops-node-api/interfaces/PipelinesInterfaces.js";
@@ -22,6 +23,7 @@ const PIPELINE_TOOLS = {
   pipelines_update_build_stage: "pipelines_update_build_stage",
   pipelines_create_pipeline: "pipelines_create_pipeline",
   pipelines_get_run: "pipelines_get_run",
+  pipelines_list_releases: "pipelines_list_releases",
   pipelines_list_runs: "pipelines_list_runs",
   pipelines_run_pipeline: "pipelines_run_pipeline",
   pipelines_list_artifacts: "pipelines_list_artifacts",
@@ -259,6 +261,58 @@ function configurePipelineTools(server: McpServer, tokenProvider: () => Promise<
 
       return {
         content: [{ type: "text", text: JSON.stringify(builds, null, 2) }],
+      };
+    }
+  );
+
+  server.tool(
+    PIPELINE_TOOLS.pipelines_list_releases,
+    "Lists classic releases for a given project.",
+    {
+      project: z.string().describe("Project ID or name to get releases for"),
+      definitionId: z.number().optional().describe("Release definition ID to filter releases"),
+      statusFilter: z.enum(getEnumKeys(ReleaseStatus) as [string, ...string[]]).optional().describe("Release status to filter releases"),
+      top: z.number().optional().describe("Number of releases to retrieve"),
+      minCreatedTime: z.coerce.date().optional().describe("Minimum created time to filter releases"),
+      maxCreatedTime: z.coerce.date().optional().describe("Maximum created time to filter releases"),
+      sourceBranchFilter: z.string().optional().describe("Source branch to filter releases"),
+      continuationToken: z.number().optional().describe("Continuation token for pagination"),
+      queryOrder: z
+        .enum(getEnumKeys(ReleaseQueryOrder) as [string, ...string[]])
+        .default("Descending")
+        .describe("Order in which releases are returned"),
+      isDeleted: z.boolean().optional().describe("Whether to include soft deleted releases"),
+    },
+    async ({ project, definitionId, statusFilter, top, minCreatedTime, maxCreatedTime, sourceBranchFilter, continuationToken, queryOrder = "Descending", isDeleted }) => {
+      const connection = await connectionProvider();
+      const releaseApi = await connection.getReleaseApi();
+      const releases = await releaseApi.getReleases(
+        project,
+        definitionId,
+        undefined,
+        undefined,
+        undefined,
+        safeEnumConvert(ReleaseStatus, statusFilter),
+        undefined,
+        minCreatedTime,
+        maxCreatedTime,
+        safeEnumConvert(ReleaseQueryOrder, queryOrder),
+        top,
+        continuationToken,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        sourceBranchFilter,
+        isDeleted,
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(releases, null, 2) }],
       };
     }
   );
