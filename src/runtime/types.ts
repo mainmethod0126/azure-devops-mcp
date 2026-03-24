@@ -12,12 +12,16 @@ export type TransportType = (typeof TRANSPORT_TYPES)[number];
 export const AUTHENTICATION_TYPES = ["interactive", "azcli", "env", "envvar"] as const;
 export type AuthenticationType = (typeof AUTHENTICATION_TYPES)[number];
 
+export const HTTP_SESSION_MODES = ["stateful", "stateless"] as const;
+export type HttpSessionMode = (typeof HTTP_SESSION_MODES)[number];
+
 export interface HttpTransportConfig {
   host: string;
   port: number;
   path: string;
   authToken: string;
   allowedOrigins: string[];
+  sessionMode: HttpSessionMode;
   sessionIdleTimeoutSeconds: number;
   isHosted: boolean;
 }

@@ -1,6 +1,6 @@
 organization: ""
 
-replicaCount: 1
+replicaCount: 3
 
 image:
   repository: ghcr.io/your-org/azure-devops-mcp
@@ -30,6 +30,7 @@ http:
   port: 3001
   path: /mcp
   allowedOrigins: []
+  sessionMode: stateless
   sessionIdleTimeoutSeconds: 1800
 
 service:
@@ -55,5 +56,9 @@ resources: {}
 nodeSelector: {}
 
 tolerations: []
+
+defaultPodAntiAffinity:
+  enabled: true
+  topologyKey: kubernetes.io/hostname
 
 affinity: {}

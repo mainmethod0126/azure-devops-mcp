@@ -150,7 +150,9 @@ Use hosted mode only when you need to expose the MCP server over HTTPS to remote
 - Azure DevOps calls are made with the credentials configured on the server host.
 - Public `server.json` remote metadata will be added only after a stable public HTTPS URL exists. Until then, the published metadata remains `stdio`-only and hosted deployments are configured directly in your MCP client.
 
-For Kubernetes deployments, use the Helm chart in [charts/azure-devops-mcp](./charts/azure-devops-mcp/README.md). It deploys the hosted server with an existing Secret, a single replica by default, and optional ingress support.
+Hosted `streamable-http` defaults to `--http-session-mode stateless`. That mode creates a fresh MCP server per request, does not emit `MCP-Session-Id`, and is the recommended choice for multi-replica deployments. Use `--http-session-mode stateful` only when you need server-managed MCP sessions; in that mode `--http-session-idle-timeout-seconds` applies and requests need session locality.
+
+For Kubernetes deployments, use the Helm chart in [charts/azure-devops-mcp](./charts/azure-devops-mcp/README.md). It deploys the hosted server with an existing Secret, defaults to three replicas with soft pod anti-affinity so they spread across nodes when possible, and exposes the service through an optional ingress. With the default `http.sessionMode: stateless`, replicas can serve requests without sticky routing. If you switch to `stateful`, sessions live in pod memory, so use sticky routing or fall back to `replicaCount: 1` or custom `affinity`.
 
 For hosted setup details, including reverse proxy expectations and bearer-secret handling, see [GETTINGSTARTED.md](./docs/GETTINGSTARTED.md), the [Helm chart README](./charts/azure-devops-mcp/README.md), and [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
 

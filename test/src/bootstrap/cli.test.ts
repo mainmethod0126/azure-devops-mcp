@@ -26,6 +26,7 @@ describe("buildCliConfig", () => {
     expect(config.domains).toEqual(["all"]);
     expect(config.http.host).toBe("127.0.0.1");
     expect(config.http.path).toBe("/mcp");
+    expect(config.http.sessionMode).toBe("stateless");
   });
 
   it("requires a static bearer token for streamable-http mode", () => {
@@ -98,6 +99,42 @@ describe("buildCliConfig", () => {
     expect(config.http.isHosted).toBe(false);
   });
 
+  it("preserves an explicit stateful session mode", () => {
+    const config = buildCliConfig(
+      createParsedArgs({
+        transport: "streamable-http",
+        httpAuthToken: "secret",
+        httpSessionMode: "stateful",
+      })
+    );
+
+    expect(config.http.sessionMode).toBe("stateful");
+  });
+
+  it("only validates the idle timeout when streamable-http runs in stateful mode", () => {
+    const statelessConfig = buildCliConfig(
+      createParsedArgs({
+        transport: "streamable-http",
+        httpAuthToken: "secret",
+        httpSessionIdleTimeoutSeconds: 0,
+      })
+    );
+
+    expect(statelessConfig.http.sessionMode).toBe("stateless");
+    expect(statelessConfig.http.sessionIdleTimeoutSeconds).toBe(0);
+
+    expect(() =>
+      buildCliConfig(
+        createParsedArgs({
+          transport: "streamable-http",
+          httpAuthToken: "secret",
+          httpSessionMode: "stateful",
+          httpSessionIdleTimeoutSeconds: 0,
+        })
+      )
+    ).toThrow("HTTP session idle timeout must be a positive integer. Received '0'.");
+  });
+
   it("normalizes the HTTP path and allowed origins", () => {
     const config = buildCliConfig(
       createParsedArgs({
@@ -127,6 +164,7 @@ function createParsedArgs(overrides: Partial<Parameters<typeof buildCliConfig>[0
     httpPath: "/mcp",
     httpAuthToken: undefined,
     httpAllowedOrigin: [],
+    httpSessionMode: "stateless",
     httpSessionIdleTimeoutSeconds: 1800,
     ...overrides,
   };

@@ -44,8 +44,12 @@ spec:
             - {{ .Values.http.port | quote }}
             - "--http-path"
             - {{ .Values.http.path | quote }}
+            - "--http-session-mode"
+            - {{ .Values.http.sessionMode | quote }}
+            {{- if eq .Values.http.sessionMode "stateful" }}
             - "--http-session-idle-timeout-seconds"
             - {{ .Values.http.sessionIdleTimeoutSeconds | quote }}
+            {{- end }}
             {{- range .Values.domains }}
             - "--domains"
             - {{ . | quote }}
@@ -97,9 +101,20 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- if .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if .Values.defaultPodAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: {{ .Values.defaultPodAntiAffinity.topologyKey | quote }}
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ include "azure-devops-mcp.name" . }}
+                    app.kubernetes.io/instance: {{ .Release.Name }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

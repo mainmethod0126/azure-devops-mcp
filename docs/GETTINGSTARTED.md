@@ -363,6 +363,7 @@ mcp-server-azuredevops Contoso \
   --http-host 0.0.0.0 \
   --http-port 3001 \
   --http-path /mcp \
+  --http-session-mode stateless \
   --http-auth-token "$ADO_MCP_HTTP_AUTH_TOKEN"
 ```
 
@@ -370,11 +371,14 @@ Notes:
 
 - Use `env` or `envvar` authentication for non-loopback hosted deployments.
 - Do not use interactive authentication for a public or non-loopback hosted endpoint.
+- `streamable-http` defaults to `--http-session-mode stateless`. Use `stateful` only when you need server-managed MCP sessions and can keep each client on the same replica.
+- `--http-session-idle-timeout-seconds` only applies in `stateful` mode.
 - If browser-based MCP clients call the endpoint, allow only the specific origins you trust.
+- In `stateless` mode the server creates a fresh MCP server per request. Tool behavior stays the same, but MCP client info captured during `initialize` is not preserved in later Azure DevOps user-agent telemetry.
 
 ### Kubernetes with Helm
 
-If you want to run the hosted server on Kubernetes, use the chart in [`charts/azure-devops-mcp`](../charts/azure-devops-mcp/README.md). The chart expects an existing Secret for both the Azure DevOps PAT and the MCP bearer secret, defaults to a single replica, and exposes the service through an optional ingress.
+If you want to run the hosted server on Kubernetes, use the chart in [`charts/azure-devops-mcp`](../charts/azure-devops-mcp/README.md). The chart expects an existing Secret for both the Azure DevOps PAT and the MCP bearer secret, defaults to three replicas with soft pod anti-affinity so they spread across nodes when possible, and exposes the service through an optional ingress. With the default `http.sessionMode: stateless`, those replicas can serve requests without sticky routing. If you switch to `stateful`, sessions live in pod memory, so use sticky routing or fall back to `replicaCount: 1` or custom `affinity`.
 
 Create the required Secret:
 

@@ -12,6 +12,7 @@ export async function runStreamableHttpServer(config: AzureDevOpsMcpCliConfig, s
     path: config.http.path,
     authToken: config.http.authToken,
     allowedOrigins: config.http.allowedOrigins,
+    sessionMode: config.http.sessionMode,
     sessionIdleTimeoutSeconds: config.http.sessionIdleTimeoutSeconds,
     serverFactory,
   });

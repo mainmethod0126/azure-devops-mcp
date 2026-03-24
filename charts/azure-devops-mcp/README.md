@@ -69,6 +69,7 @@ ingress:
         - mcp.example.com
 
 http:
+  sessionMode: stateless
   allowedOrigins:
     - https://copilot.microsoft.com
     - https://chat.openai.com
@@ -76,5 +77,9 @@ http:
 
 ## Notes
 
-- The chart defaults to `replicaCount: 1` and `strategy.type: Recreate` because MCP sessions are stored in pod memory.
+- The chart defaults to `replicaCount: 3` and applies a soft `podAntiAffinity` on `kubernetes.io/hostname` so replicas spread across nodes when the cluster has capacity. You can tune or disable this with `defaultPodAntiAffinity.topologyKey` and `defaultPodAntiAffinity.enabled`.
+- User-supplied `affinity` fully overrides the generated default anti-affinity. Set `replicaCount: 1` or provide custom scheduling rules if you need a different placement policy.
+- The chart defaults to `http.sessionMode: stateless`, which avoids `MCP-Session-Id` and works with multi-replica scheduling without sticky routing.
+- If you switch `http.sessionMode` to `stateful`, MCP sessions are stored in pod memory. In that mode, use sticky routing at your ingress, service mesh, or load balancer, or fall back to `replicaCount: 1` or custom `affinity`. `http.sessionIdleTimeoutSeconds` only applies in `stateful` mode.
+- `strategy.type: Recreate` remains the default.
 - `readinessProbe` and `livenessProbe` intentionally treat `405 Method Not Allowed` on `GET /mcp` as healthy, matching the current Docker Compose deployment.

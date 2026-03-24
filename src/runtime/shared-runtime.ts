@@ -54,6 +54,7 @@ export async function createSharedRuntime(config: AzureDevOpsMcpCliConfig): Prom
       httpPort: config.http.port,
       httpPath: config.http.path,
       httpAllowedOrigins: config.http.allowedOrigins,
+      httpSessionMode: config.http.sessionMode,
       httpSessionIdleTimeoutSeconds: config.http.sessionIdleTimeoutSeconds,
       httpHosted: config.http.isHosted,
       httpAuthTokenConfigured: config.transport === "streamable-http",

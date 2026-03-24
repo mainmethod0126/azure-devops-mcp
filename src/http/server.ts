@@ -8,7 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 import { logger } from "../logger.js";
-import type { McpServerFactory, McpServerInstance } from "../runtime/types.js";
+import type { HttpSessionMode, McpServerFactory, McpServerInstance } from "../runtime/types.js";
 
 interface SessionState {
   serverInstance: McpServerInstance;
@@ -24,6 +24,7 @@ export interface StreamableHttpServerOptions {
   path: string;
   authToken: string;
   allowedOrigins: string[];
+  sessionMode: HttpSessionMode;
   sessionIdleTimeoutSeconds: number;
   serverFactory: McpServerFactory;
 }
@@ -34,10 +35,11 @@ export interface StreamableHttpServerHandle {
 }
 
 export async function startStreamableHttpServer(options: StreamableHttpServerOptions): Promise<StreamableHttpServerHandle> {
-  const sessions = new Map<string, SessionState>();
-  const idleTimeoutMs = options.sessionIdleTimeoutSeconds * 1000;
-  const cleanupIntervalMs = Math.max(1000, Math.min(idleTimeoutMs, 30_000));
   const allowedOrigins = new Set(options.allowedOrigins);
+  const allowHeaderValue = options.sessionMode === "stateful" ? "POST, DELETE" : "POST";
+  const statefulSessionController =
+    options.sessionMode === "stateful" ? createStatefulSessionController(options.serverFactory, options.sessionIdleTimeoutSeconds) : undefined;
+  const statelessRequests = new Set<SessionState>();
   const server = createServer((request, response) => {
     void handleHttpRequest(request, response).catch((error) => {
       logger.error("Failed to handle streamable-http request:", error);
@@ -48,26 +50,18 @@ export async function startStreamableHttpServer(options: StreamableHttpServerOpt
     });
   });
 
-  const cleanupTimer = setInterval(() => {
-    const expirationTime = Date.now() - idleTimeoutMs;
-
-    for (const [sessionId, session] of sessions.entries()) {
-      if (session.lastActivityAt <= expirationTime) {
-        void destroySession(sessionId);
-      }
-    }
-  }, cleanupIntervalMs);
-
-  cleanupTimer.unref?.();
-
   await listen(server, options.port, options.host);
 
   return {
     url: buildServerUrl(options.host, options.port, options.path),
     close: async () => {
-      clearInterval(cleanupTimer);
-
-      await Promise.all(Array.from(sessions.keys()).map((sessionId) => destroySession(sessionId)));
+      if (statefulSessionController) {
+        await statefulSessionController.close();
+      } else {
+        const activeRequests = Array.from(statelessRequests);
+        statelessRequests.clear();
+        await Promise.all(activeRequests.map((session) => closeSessionState(session)));
+      }
 
       await closeNodeServer(server);
     },
@@ -94,24 +88,29 @@ export async function startStreamableHttpServer(options: StreamableHttpServerOpt
 
     switch (request.method) {
       case "POST":
-        await handlePostRequest(request, response);
+        if (statefulSessionController) {
+          await statefulSessionController.handlePostRequest(request, response);
+        } else {
+          await handleStatelessPostRequest(request, response);
+        }
         return;
       case "DELETE":
-        await handleDeleteRequest(request, response);
+        if (statefulSessionController) {
+          await statefulSessionController.handleDeleteRequest(request, response);
+        } else {
+          sendMethodNotAllowed(response, allowHeaderValue);
+        }
         return;
       case "GET":
-        response.setHeader("Allow", "POST, DELETE");
-        sendPlainText(response, 405, "Method Not Allowed");
+        sendMethodNotAllowed(response, allowHeaderValue);
         return;
       default:
-        response.setHeader("Allow", "POST, DELETE");
-        sendPlainText(response, 405, "Method Not Allowed");
+        sendMethodNotAllowed(response, allowHeaderValue);
         return;
     }
   }
 
-  async function handlePostRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
+  async function handleStatelessPostRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     let parsedBody: unknown;
 
     try {
@@ -121,99 +120,124 @@ export async function startStreamableHttpServer(options: StreamableHttpServerOpt
       return;
     }
 
-    if (sessionId) {
-      const session = sessions.get(sessionId);
+    const session = createStatelessSessionState(options.serverFactory);
+    statelessRequests.add(session);
+    const closeRequest = createAsyncOnce(async () => {
+      statelessRequests.delete(session);
+      await closeSessionState(session);
+    });
 
-      if (!session || isExpired(session)) {
+    response.once("close", () => {
+      void closeRequest();
+    });
+    response.once("finish", () => {
+      void closeRequest();
+    });
+
+    try {
+      await session.serverInstance.server.connect(session.transport);
+      await session.transport.handleRequest(request, response, parsedBody);
+    } catch (error) {
+      await closeRequest();
+      throw error;
+    }
+  }
+}
+
+interface StatefulSessionController {
+  handlePostRequest(request: IncomingMessage, response: ServerResponse): Promise<void>;
+  handleDeleteRequest(request: IncomingMessage, response: ServerResponse): Promise<void>;
+  close(): Promise<void>;
+}
+
+function createStatefulSessionController(
+  serverFactory: McpServerFactory,
+  sessionIdleTimeoutSeconds: number
+): StatefulSessionController {
+  const sessions = new Map<string, SessionState>();
+  const idleTimeoutMs = sessionIdleTimeoutSeconds * 1000;
+  const cleanupIntervalMs = Math.max(1000, Math.min(idleTimeoutMs, 30_000));
+  const cleanupTimer = setInterval(() => {
+    const expirationTime = Date.now() - idleTimeoutMs;
+
+    for (const [sessionId, session] of sessions.entries()) {
+      if (session.lastActivityAt <= expirationTime) {
+        void destroySession(sessionId);
+      }
+    }
+  }, cleanupIntervalMs);
+
+  cleanupTimer.unref?.();
+
+  return {
+    handlePostRequest: async (request, response) => {
+      const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
+      let parsedBody: unknown;
+
+      try {
+        parsedBody = await parseJsonBody(request);
+      } catch {
+        sendPlainText(response, 400, "Bad Request");
+        return;
+      }
+
+      if (sessionId) {
+        const session = sessions.get(sessionId);
+
+        if (!session || isExpired(session, idleTimeoutMs)) {
+          await destroySession(sessionId);
+          sendPlainText(response, 404, "Session not found");
+          return;
+        }
+
+        touchSession(session);
+        await session.transport.handleRequest(request, response, parsedBody);
+        return;
+      }
+
+      if (!isInitializeRequest(parsedBody)) {
+        sendJsonRpcError(response, 400, "Bad Request: No valid session ID provided");
+        return;
+      }
+
+      const session = createStatefulSessionState(serverFactory, sessions);
+
+      try {
+        await session.serverInstance.server.connect(session.transport);
+        await session.transport.handleRequest(request, response, parsedBody);
+      } catch (error) {
+        await closeSessionState(session);
+        throw error;
+      }
+
+      if (!session.sessionId) {
+        await closeSessionState(session);
+      }
+    },
+    handleDeleteRequest: async (request, response) => {
+      const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
+
+      if (!sessionId) {
+        sendPlainText(response, 404, "Session not found");
+        return;
+      }
+
+      const session = sessions.get(sessionId);
+      if (!session || isExpired(session, idleTimeoutMs)) {
         await destroySession(sessionId);
         sendPlainText(response, 404, "Session not found");
         return;
       }
 
       touchSession(session);
-      await session.transport.handleRequest(request, response, parsedBody);
-      return;
-    }
-
-    if (!isInitializeRequest(parsedBody)) {
-      sendJsonRpcError(response, 400, "Bad Request: No valid session ID provided");
-      return;
-    }
-
-    const session = createSessionState();
-
-    try {
-      await session.serverInstance.server.connect(session.transport);
-      await session.transport.handleRequest(request, response, parsedBody);
-    } catch (error) {
-      await closeSessionState(session);
-      throw error;
-    }
-
-    if (!session.sessionId) {
-      await closeSessionState(session);
-    }
-  }
-
-  async function handleDeleteRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    const sessionId = getHeaderValue(request.headers["mcp-session-id"]);
-
-    if (!sessionId) {
-      sendPlainText(response, 404, "Session not found");
-      return;
-    }
-
-    const session = sessions.get(sessionId);
-    if (!session || isExpired(session)) {
+      await session.transport.handleRequest(request, response);
       await destroySession(sessionId);
-      sendPlainText(response, 404, "Session not found");
-      return;
-    }
-
-    touchSession(session);
-    await session.transport.handleRequest(request, response);
-    await destroySession(sessionId);
-  }
-
-  function createSessionState(): SessionState {
-    const serverInstance = options.serverFactory({ deploymentMode: "hosted" });
-
-    const session: SessionState = {
-      serverInstance,
-      transport: undefined as unknown as StreamableHTTPServerTransport,
-      lastActivityAt: Date.now(),
-      closed: false,
-    };
-
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      enableJsonResponse: true,
-      onsessioninitialized: (sessionId) => {
-        session.sessionId = sessionId;
-        touchSession(session);
-        sessions.set(sessionId, session);
-      },
-    });
-
-    transport.onclose = () => {
-      if (session.sessionId) {
-        sessions.delete(session.sessionId);
-      }
-      session.closed = true;
-    };
-
-    session.transport = transport;
-
-    return session;
-  }
-
-  function touchSession(session: SessionState): void {
-    session.lastActivityAt = Date.now();
-  }
-
-  function isExpired(session: SessionState): boolean {
-    return Date.now() - session.lastActivityAt >= idleTimeoutMs;
-  }
+    },
+    close: async () => {
+      clearInterval(cleanupTimer);
+      await Promise.all(Array.from(sessions.keys()).map((sessionId) => destroySession(sessionId)));
+    },
+  };
 
   async function destroySession(sessionId: string): Promise<void> {
     const session = sessions.get(sessionId);
@@ -224,6 +248,60 @@ export async function startStreamableHttpServer(options: StreamableHttpServerOpt
     sessions.delete(sessionId);
     await closeSessionState(session);
   }
+}
+
+function createStatefulSessionState(serverFactory: McpServerFactory, sessions: Map<string, SessionState>): SessionState {
+  let session: SessionState;
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    enableJsonResponse: true,
+    onsessioninitialized: (sessionId) => {
+      session.sessionId = sessionId;
+      touchSession(session);
+      sessions.set(sessionId, session);
+    },
+  });
+
+  session = createHostedSessionState(serverFactory, transport);
+  transport.onclose = () => {
+    if (session.sessionId) {
+      sessions.delete(session.sessionId);
+    }
+    session.closed = true;
+  };
+
+  return session;
+}
+
+function createStatelessSessionState(serverFactory: McpServerFactory): SessionState {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  const session = createHostedSessionState(serverFactory, transport);
+
+  transport.onclose = () => {
+    session.closed = true;
+  };
+
+  return session;
+}
+
+function createHostedSessionState(serverFactory: McpServerFactory, transport: StreamableHTTPServerTransport): SessionState {
+  return {
+    serverInstance: serverFactory({ deploymentMode: "hosted" }),
+    transport,
+    lastActivityAt: Date.now(),
+    closed: false,
+  };
+}
+
+function touchSession(session: SessionState): void {
+  session.lastActivityAt = Date.now();
+}
+
+function isExpired(session: SessionState, idleTimeoutMs: number): boolean {
+  return Date.now() - session.lastActivityAt >= idleTimeoutMs;
 }
 
 async function closeSessionState(session: SessionState): Promise<void> {
@@ -298,6 +376,20 @@ function getHeaderValue(header: string | string[] | undefined): string | undefin
   }
 
   return header;
+}
+
+function createAsyncOnce(action: () => Promise<void>): () => Promise<void> {
+  let result: Promise<void> | undefined;
+
+  return () => {
+    result ??= action();
+    return result;
+  };
+}
+
+function sendMethodNotAllowed(response: ServerResponse, allowHeaderValue: string): void {
+  response.setHeader("Allow", allowHeaderValue);
+  sendPlainText(response, 405, "Method Not Allowed");
 }
 
 function sendPlainText(response: ServerResponse, statusCode: number, message: string): void {

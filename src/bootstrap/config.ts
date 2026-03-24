@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { DomainsManager } from "../shared/domains.js";
-import { type AuthenticationType, type AzureDevOpsMcpCliConfig, type TransportType } from "../runtime/types.js";
+import { type AuthenticationType, type AzureDevOpsMcpCliConfig, type HttpSessionMode, type TransportType } from "../runtime/types.js";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
 
@@ -17,6 +17,7 @@ export interface ParsedCliArgs {
   httpPath: string;
   httpAuthToken?: string;
   httpAllowedOrigin?: string[];
+  httpSessionMode: HttpSessionMode;
   httpSessionIdleTimeoutSeconds: number;
 }
 
@@ -33,6 +34,7 @@ export function buildCliConfig(parsed: ParsedCliArgs): AzureDevOpsMcpCliConfig {
   const httpHost = parsed.httpHost.trim();
   const httpPath = normalizeHttpPath(parsed.httpPath);
   const httpAuthToken = parsed.httpAuthToken?.trim() || process.env.ADO_MCP_HTTP_AUTH_TOKEN?.trim();
+  const httpSessionMode = parsed.httpSessionMode;
   const isHosted = parsed.transport === "streamable-http" && !isLoopbackHost(httpHost);
   const authentication = resolveAuthentication(parsed.authentication, isHosted);
 
@@ -41,7 +43,9 @@ export function buildCliConfig(parsed: ParsedCliArgs): AzureDevOpsMcpCliConfig {
   }
 
   validatePort(parsed.httpPort);
-  validateIdleTimeoutSeconds(parsed.httpSessionIdleTimeoutSeconds);
+  if (parsed.transport === "streamable-http" && httpSessionMode === "stateful") {
+    validateIdleTimeoutSeconds(parsed.httpSessionIdleTimeoutSeconds);
+  }
   validateHostedAuthentication(authentication, isHosted);
 
   if (parsed.transport === "streamable-http" && !httpAuthToken) {
@@ -60,6 +64,7 @@ export function buildCliConfig(parsed: ParsedCliArgs): AzureDevOpsMcpCliConfig {
       path: httpPath,
       authToken: httpAuthToken ?? "",
       allowedOrigins: normalizeOrigins(parsed.httpAllowedOrigin),
+      sessionMode: httpSessionMode,
       sessionIdleTimeoutSeconds: parsed.httpSessionIdleTimeoutSeconds,
       isHosted,
     },

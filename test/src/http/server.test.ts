@@ -6,24 +6,26 @@ import { createServer as createNetServer } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 
 import { startStreamableHttpServer, type StreamableHttpServerHandle } from "../../../src/http/server";
-import type { McpServerFactory } from "../../../src/runtime/types";
+import type { HttpSessionMode, McpServerFactory } from "../../../src/runtime/types";
 import { UserAgentComposer } from "../../../src/useragent";
 
 const AUTH_TOKEN = "test-secret";
 
 describe("startStreamableHttpServer", () => {
-  let server: StreamableHttpServerHandle | undefined;
+  let servers: StreamableHttpServerHandle[] = [];
 
   afterEach(async () => {
-    await server?.close();
-    server = undefined;
+    await Promise.all(servers.map((server) => server.close()));
+    servers = [];
   });
 
-  it("returns 404 for the wrong path", async () => {
-    server = await startTestServer();
+  it.each([
+    { sessionMode: "stateful" as const },
+    { sessionMode: "stateless" as const },
+  ])("returns 404 for the wrong path in $sessionMode mode", async ({ sessionMode }) => {
+    const server = await startTestServer({ sessionMode });
 
     const response = await fetch(server.url.replace("/mcp", "/wrong"), {
       method: "POST",
@@ -34,8 +36,11 @@ describe("startStreamableHttpServer", () => {
     expect(response.status).toBe(404);
   });
 
-  it("returns 405 for GET requests", async () => {
-    server = await startTestServer();
+  it.each([
+    { sessionMode: "stateful" as const, allow: "POST, DELETE" },
+    { sessionMode: "stateless" as const, allow: "POST" },
+  ])("returns 405 for GET requests in $sessionMode mode", async ({ sessionMode, allow }) => {
+    const server = await startTestServer({ sessionMode });
 
     const response = await fetch(server.url, {
       method: "GET",
@@ -43,10 +48,14 @@ describe("startStreamableHttpServer", () => {
     });
 
     expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe(allow);
   });
 
-  it("returns 401 when the bearer token is missing or invalid", async () => {
-    server = await startTestServer();
+  it.each([
+    { sessionMode: "stateful" as const },
+    { sessionMode: "stateless" as const },
+  ])("returns 401 when the bearer token is missing or invalid in $sessionMode mode", async ({ sessionMode }) => {
+    const server = await startTestServer({ sessionMode });
 
     const missingTokenResponse = await fetch(server.url, {
       method: "POST",
@@ -68,8 +77,12 @@ describe("startStreamableHttpServer", () => {
     expect(invalidTokenResponse.status).toBe(401);
   });
 
-  it("returns 403 when the request origin is not allowed", async () => {
-    server = await startTestServer({
+  it.each([
+    { sessionMode: "stateful" as const },
+    { sessionMode: "stateless" as const },
+  ])("returns 403 when the request origin is not allowed in $sessionMode mode", async ({ sessionMode }) => {
+    const server = await startTestServer({
+      sessionMode,
       allowedOrigins: ["https://allowed.example"],
     });
 
@@ -84,8 +97,8 @@ describe("startStreamableHttpServer", () => {
     expect(response.status).toBe(403);
   });
 
-  it("returns 400 when a non-initialize POST omits the session id", async () => {
-    server = await startTestServer();
+  it("returns 400 when a stateful non-initialize POST omits the session id", async () => {
+    const server = await startTestServer({ sessionMode: "stateful" });
 
     const response = await fetch(server.url, {
       method: "POST",
@@ -106,20 +119,9 @@ describe("startStreamableHttpServer", () => {
     });
   });
 
-  it("supports initialize and tools/list through the streamable HTTP client transport", async () => {
-    server = await startTestServer();
-
-    const transport = new StreamableHTTPClientTransport(new URL(server.url), {
-      requestInit: {
-        headers: createHeaders(),
-      },
-    });
-    const client = new Client({
-      name: "Jest",
-      version: "1.0.0",
-    });
-
-    await client.connect(transport);
+  it("supports initialize and tools/list through the stateful streamable HTTP client transport", async () => {
+    const server = await startTestServer({ sessionMode: "stateful" });
+    const { client, transport } = await connectClient(server.url);
     const tools = await client.listTools();
 
     expect(transport.sessionId).toBeDefined();
@@ -128,8 +130,8 @@ describe("startStreamableHttpServer", () => {
     await client.close();
   });
 
-  it("returns 404 after a session is explicitly deleted", async () => {
-    server = await startTestServer();
+  it("returns 404 after a stateful session is explicitly deleted", async () => {
+    const server = await startTestServer({ sessionMode: "stateful" });
     const { client, transport } = await connectClient(server.url);
     const sessionId = transport.sessionId;
 
@@ -162,8 +164,9 @@ describe("startStreamableHttpServer", () => {
     await client.close();
   });
 
-  it("expires idle sessions and allows a new session to start afterwards", async () => {
-    server = await startTestServer({
+  it("expires idle stateful sessions and allows a new session to start afterwards", async () => {
+    const server = await startTestServer({
+      sessionMode: "stateful",
       sessionIdleTimeoutSeconds: 1,
     });
 
@@ -197,29 +200,83 @@ describe("startStreamableHttpServer", () => {
 
     await nextConnection.client.close();
   });
-});
 
-async function startTestServer(overrides: Partial<TestServerOptions> = {}): Promise<StreamableHttpServerHandle> {
-  const options: TestServerOptions = {
-    host: "127.0.0.1",
-    port: await findAvailablePort(),
-    path: "/mcp",
-    authToken: AUTH_TOKEN,
-    allowedOrigins: [],
-    sessionIdleTimeoutSeconds: 30,
-    ...overrides,
-  };
+  it("supports initialize and tools/list without a session id in stateless mode", async () => {
+    const server = await startTestServer({ sessionMode: "stateless" });
+    const { client, transport } = await connectClient(server.url);
+    const tools = await client.listTools();
 
-  return startStreamableHttpServer({
-    host: options.host,
-    port: options.port,
-    path: options.path,
-    authToken: options.authToken,
-    allowedOrigins: options.allowedOrigins,
-    sessionIdleTimeoutSeconds: options.sessionIdleTimeoutSeconds,
-    serverFactory: createTestServerFactory(),
+    expect(transport.sessionId).toBeUndefined();
+    expect(tools.tools.some((tool) => tool.name === "test_echo")).toBe(true);
+
+    await client.close();
   });
-}
+
+  it("returns 405 for DELETE requests in stateless mode", async () => {
+    const server = await startTestServer({ sessionMode: "stateless" });
+
+    const response = await fetch(server.url, {
+      method: "DELETE",
+      headers: createHeaders(),
+    });
+
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("POST");
+  });
+
+  it("supports stateless clients across multiple replicas without sticky routing", async () => {
+    const firstServer = await startTestServer({ sessionMode: "stateless" });
+    const secondServer = await startTestServer({ sessionMode: "stateless" });
+    const routedHosts: string[] = [];
+    const transport = new StreamableHTTPClientTransport(new URL(firstServer.url), {
+      fetch: createAlternatingFetch([firstServer.url, secondServer.url], routedHosts),
+      requestInit: {
+        headers: createHeaders(),
+      },
+    });
+    const client = new Client({
+      name: "Jest",
+      version: "1.0.0",
+    });
+
+    await client.connect(transport);
+    const tools = await client.listTools();
+
+    expect(transport.sessionId).toBeUndefined();
+    expect(tools.tools.some((tool) => tool.name === "test_echo")).toBe(true);
+    expect(new Set(routedHosts).size).toBeGreaterThan(1);
+
+    await client.close();
+  });
+
+  async function startTestServer(overrides: Partial<TestServerOptions> = {}): Promise<StreamableHttpServerHandle> {
+    const options: TestServerOptions = {
+      host: "127.0.0.1",
+      port: await findAvailablePort(),
+      path: "/mcp",
+      authToken: AUTH_TOKEN,
+      allowedOrigins: [],
+      sessionMode: "stateful",
+      sessionIdleTimeoutSeconds: 30,
+      ...overrides,
+    };
+
+    const server = await startStreamableHttpServer({
+      host: options.host,
+      port: options.port,
+      path: options.path,
+      authToken: options.authToken,
+      allowedOrigins: options.allowedOrigins,
+      sessionMode: options.sessionMode,
+      sessionIdleTimeoutSeconds: options.sessionIdleTimeoutSeconds,
+      serverFactory: createTestServerFactory(),
+    });
+
+    servers.push(server);
+
+    return server;
+  }
+});
 
 async function connectClient(url: string): Promise<{
   client: Client;
@@ -280,6 +337,33 @@ function createHeaders(extraHeaders: Record<string, string> = {}): HeadersInit {
   };
 }
 
+function createAlternatingFetch(urls: string[], routedHosts: string[]): typeof fetch {
+  let nextIndex = 0;
+
+  return async (input, init) => {
+    const requestUrl = toUrl(input);
+    const targetBaseUrl = new URL(urls[nextIndex % urls.length]);
+    const targetUrl = new URL(`${requestUrl.pathname}${requestUrl.search}`, targetBaseUrl);
+
+    nextIndex += 1;
+    routedHosts.push(targetUrl.host);
+
+    return fetch(targetUrl, init);
+  };
+}
+
+function toUrl(input: string | URL | Request): URL {
+  if (input instanceof URL) {
+    return input;
+  }
+
+  if (input instanceof Request) {
+    return new URL(input.url);
+  }
+
+  return new URL(input);
+}
+
 async function findAvailablePort(): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const server = createNetServer();
@@ -311,5 +395,6 @@ interface TestServerOptions {
   path: string;
   authToken: string;
   allowedOrigins: string[];
+  sessionMode: HttpSessionMode;
   sessionIdleTimeoutSeconds: number;
 }
